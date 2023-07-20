@@ -45,7 +45,8 @@ async fn load_rodosol() -> ResponseResult<String> {
 fn parse_images_url(html: &str) -> Vec<String> {
     const IMAGE_IDENTIFYING_PART: &str = "https://www.rodosol.com.br/_util/cameras/camera";
     let fragment = Html::parse_fragment(html);
-    let selector = Selector::parse("img").unwrap();
+    let selector =
+        Selector::parse("img").expect("Unwrap should be safe because the selector is hardcoded");
     let mut res: Vec<String> = fragment
         .select(&selector)
         .filter_map(|element| {
@@ -58,7 +59,6 @@ fn parse_images_url(html: &str) -> Vec<String> {
         })
         .collect();
     res.dedup();
-    dbg!(&res);
     res
 }
 
@@ -68,26 +68,39 @@ async fn answer(bot: Bot, msg: Message, cmd: Command) -> ResponseResult<()> {
             bot.send_message(msg.chat.id, Command::descriptions().to_string())
                 .allow_sending_without_reply(false)
                 .reply_to_message_id(msg.id)
-                .await?
+                .await?;
         }
         Command::Ponte => {
-            let website = load_rodosol();
-            let _ = bot
-                .send_message(msg.chat.id, "Aguarde...")
+            {
+                if let Some(from) = msg.from() {
+                    log::info!(
+                        "user '{}' (id = {}) requested pictures",
+                        from.username
+                            .as_ref()
+                            .unwrap_or(&"(no username!)".to_string()),
+                        from.id
+                    );
+                } else {
+                    log::info!("(chat {}) requested pictures", msg.chat.id);
+                }
+            }
+            bot.send_message(msg.chat.id, "Aguarde...")
                 .allow_sending_without_reply(false)
-                .reply_to_message_id(msg.id);
-            let images_url = parse_images_url(&website.await?);
-            let mut messages_futures = vec![];
+                .reply_to_message_id(msg.id)
+                .await?;
+            let images_url = parse_images_url(&load_rodosol().await?);
+            let mut futures = Vec::with_capacity(images_url.len());
             for url in images_url {
+                // TODO remove unwrap
                 let url = reqwest::Url::parse(&url).unwrap();
-                let msg = bot
+                let future = bot
                     .send_photo(msg.chat.id, InputFile::url(url))
                     .allow_sending_without_reply(false)
-                    .reply_to_message_id(msg.id).await; // TODO Don't await here
-                messages_futures.push(msg);
+                    .reply_to_message_id(msg.id)
+                    .send();
+                futures.push(future);
             }
-            // join_all(messages_futures).await;
-            todo!()
+            join_all(futures).await;
         }
     };
 
